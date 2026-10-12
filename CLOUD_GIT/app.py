@@ -20,31 +20,30 @@ def create_app():
     app.config.from_object(Config)
 
     # CORS configuration
-    # Restrict API access to configured frontend origins in production.
-    allowed_origins = os.getenv("CORS_ORIGINS", "*").split(",")
+    allowed_origins = [
+        origin.strip()
+        for origin in os.getenv("CORS_ORIGINS", "*").split(",")
+        if origin.strip()
+    ]
 
     CORS(
         app,
         resources={
             r"/api/*": {
-                "origins": [
-                    origin.strip()
-                    for origin in allowed_origins
-                    if origin.strip()
-                ]
+                "origins": allowed_origins
             }
         }
     )
 
     # Rate limiting
     limiter = Limiter(
-        get_remote_address,
+        key_func=get_remote_address,
         app=app,
         default_limits=["200 per day", "50 per hour"],
         storage_uri="memory://"
     )
 
-    # Apply a specific rate limit to API routes
+    # Apply an additional limit to API routes
     limiter.limit("20 per minute")(api_bp)
 
     # Register API blueprint
@@ -88,9 +87,11 @@ def create_app():
     return app
 
 
-if __name__ == "__main__":
-    app = create_app()
+# Expose the Flask application for Gunicorn on Render
+app = create_app()
 
+
+if __name__ == "__main__":
     app.run(
         host="0.0.0.0",
         port=Config.PORT,
