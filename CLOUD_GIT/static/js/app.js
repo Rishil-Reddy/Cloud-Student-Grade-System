@@ -60,49 +60,83 @@ async function apiRequest(endpoint, options = {}) {
 // AUTHENTICATION (EMULATOR / FIREBASE)
 // ==========================================
 
+
+ // ==========================================
+ // AUTHENTICATION (FIREBASE)
+ // ==========================================
+
 async function login(email, password) {
   try {
-    // In emulator or Firebase Auth REST API, authenticate via Identity Toolkit endpoint
-    const apiKey = "fake-api-key"; // Emulator does not validate real keys
-    const authUrl = `http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`;
-    
-    const resp = await fetch(authUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email,
-        password,
-        returnSecureToken: true
-      })
-    });
-    
-    const authData = await resp.json();
-    if (!resp.ok) {
-      throw new Error(authData.error?.message || "Invalid email or password");
+    if (
+      !window.firebaseAuth ||
+      !window.firebaseSignIn
+    ) {
+      throw new Error("Firebase is not initialized. Please refresh the page.");
     }
-    
-    state.token = authData.idToken;
-    localStorage.setItem('token', state.token);
-    
-    // Fetch user profile from backend
-    const meData = await apiRequest('/api/auth/me');
+
+    // Sign in using the Firebase Web SDK
+    const userCredential = await window.firebaseSignIn(
+      window.firebaseAuth,
+      email,
+      password
+    );
+
+    // Obtain a Firebase ID token for the Flask API
+    const idToken = await userCredential.user.getIdToken();
+
+    state.token = idToken;
+    localStorage.setItem("token", idToken);
+
+    // Fetch the authenticated user's profile from Flask
+    const meData = await apiRequest("/api/auth/me");
+
     state.user = meData.user;
-    localStorage.setItem('user', JSON.stringify(state.user));
-    
+    localStorage.setItem("user", JSON.stringify(state.user));
+
     showToast(`Welcome back, ${state.user.name}!`);
     renderApp();
   } catch (err) {
-    showToast(err.message, 'error');
+    // If profile loading fails, don't leave a partial session
+    state.token = null;
+    state.user = null;
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+
+    if (window.firebaseAuth?.currentUser) {
+      await window.firebaseSignOut(window.firebaseAuth)
+        .catch(() => {});
+    }
+
+    const message =
+      err.code === "auth/invalid-credential" ||
+      err.code === "auth/wrong-password" ||
+      err.code === "auth/user-not-found"
+        ? "Invalid email or password."
+        : err.message || "Unable to sign in.";
+
+    showToast(message, "error");
   }
 }
 
-function logout() {
+async function logout() {
+  try {
+    if (window.firebaseAuth && window.firebaseSignOut) {
+      await window.firebaseSignOut(window.firebaseAuth);
+    }
+  } catch (err) {
+    showToast("Could not complete sign out. Please try again.", "error");
+    return;
+  }
+
   state.token = null;
   state.user = null;
-  localStorage.removeItem('token');
-  localStorage.removeItem('user');
+
+  localStorage.removeItem("token");
+  localStorage.removeItem("user");
+
   renderApp();
 }
+
 
 // ==========================================
 // RENDER VIEWS
