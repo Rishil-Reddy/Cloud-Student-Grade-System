@@ -1,4 +1,4 @@
-```python
+
 import os
 import json
 from functools import wraps
@@ -175,4 +175,4 @@ def require_role(allowed_roles):
         return decorated_function
 
     return decorator
-```
+
