@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -5,17 +6,48 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Cloud-based Student Result Management System with secure role-based access control, grade calculation, and official PDF transcript export.">
   <title>Student Result Management System | Cloud Portal</title>
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
   <link rel="stylesheet" href="/static/css/styles.css">
 </head>
 <body>
   <div class="app-container" id="app-root">
     <!-- Rendered dynamically by static/js/app.js -->
   </div>
-  
+
   <div class="toast-container" id="toast-container"></div>
+
+  <script type="module">
+    import { initializeApp } from
+      "https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js";
+
+    import {
+      getAuth,
+      signInWithEmailAndPassword,
+      signOut
+    } from
+      "https://www.gstatic.com/firebasejs/12.0.0/firebase-auth.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyAvSofm9xQdr-Ek_B2DD9Md8YGnztNzb0o",
+      authDomain: "cloud-student-grade-system.firebaseapp.com",
+      projectId: "cloud-student-grade-system",
+      storageBucket: "cloud-student-grade-system.firebasestorage.app",
+      messagingSenderId: "954478887506",
+      appId: "1:954478887506:web:8adef3bd0ef776dfbf158b"
+    };
+
+    const firebaseApp = initializeApp(firebaseConfig);
+    const auth = getAuth(firebaseApp);
+
+    // Make Firebase Authentication available to app.js
+    window.firebaseAuth = auth;
+    window.firebaseSignIn = signInWithEmailAndPassword;
+    window.firebaseSignOut = signOut;
+  </script>
 
   <script src="/static/js/app.js"></script>
 </body>
