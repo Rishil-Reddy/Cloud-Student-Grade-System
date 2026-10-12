@@ -1,0 +1,67 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function getUserRole() {
+      return request.auth.token.role;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && (getUserRole() == 'admin' || request.auth.token.admin == true);
+    }
+    
+    function isTeacher() {
+      return isAuthenticated() && getUserRole() == 'teacher';
+    }
+    
+    function isStudent() {
+      return isAuthenticated() && getUserRole() == 'student';
+    }
+    
+    // Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin() || isTeacher());
+      allow write: if isAdmin();
+    }
+    
+    // Semesters & Courses
+    match /semesters/{semesterId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    match /courses/{courseId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+    
+    // Marks collection
+    match /marks/{markId} {
+      // Students can ONLY read their own marks
+      allow read: if isAdmin() || 
+                  (isTeacher() && request.auth.uid in resource.data.teacher_uids) ||
+                  (isStudent() && resource.data.student_uid == request.auth.uid);
+                  
+      // Only admins and assigned teachers can write marks
+      allow write: if isAdmin() || (isTeacher() && request.auth.uid in request.resource.data.teacher_uids);
+    }
+    
+    // Audit logs (Read-only for Admin, append-only by backend/admin)
+    match /audit_logs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if false; // Immutable audit log
+    }
+    
+    // System Config
+    match /system_config/{docId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+  }
+}
