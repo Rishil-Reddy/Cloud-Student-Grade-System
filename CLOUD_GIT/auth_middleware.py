@@ -1,4 +1,6 @@
+```python
 import os
+import json
 from functools import wraps
 
 from flask import request, jsonify, g
@@ -11,34 +13,38 @@ from google.cloud import firestore as google_firestore
 load_dotenv()
 
 
-# ==========================================
-# FIREBASE INITIALIZATION
-# ==========================================
-
 def initialize_firebase():
-    """Initialize Firebase Admin using valid application credentials."""
-    if not firebase_admin._apps:
-        project_id = os.getenv(
-            "GCP_PROJECT_ID",
-            "cloud-student-grade-system"
-        )
+    """Initialize Firebase Admin SDK using Render credentials or ADC."""
+    if firebase_admin._apps:
+        return
 
-        # Application Default Credentials must be configured
-        # in the deployment environment.
+    project_id = os.getenv(
+        "GCP_PROJECT_ID",
+        "cloud-student-grade-system"
+    )
+
+    service_account_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+
+    if service_account_json:
+        try:
+            service_account_info = json.loads(service_account_json)
+            cred = credentials.Certificate(service_account_info)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise RuntimeError(
+                "FIREBASE_SERVICE_ACCOUNT_JSON is invalid."
+            ) from exc
+    else:
+        # Useful when running locally with Application Default Credentials.
         cred = credentials.ApplicationDefault()
 
-        firebase_admin.initialize_app(
-            cred,
-            {"projectId": project_id}
-        )
+    firebase_admin.initialize_app(
+        cred,
+        {"projectId": project_id}
+    )
 
 
 initialize_firebase()
 
-
-# ==========================================
-# FIRESTORE DATABASE
-# ==========================================
 
 def get_db():
     """Return the Firestore client for the configured project."""
@@ -47,21 +53,16 @@ def get_db():
         "cloud-student-grade-system"
     )
 
-    if os.getenv("FIRESTORE_EMULATOR_HOST"):
+    emulator_host = os.getenv("FIRESTORE_EMULATOR_HOST")
+
+    if emulator_host:
         return google_firestore.Client(project=project_id)
 
     return firestore.client()
 
 
-# ==========================================
-# AUTHENTICATION MIDDLEWARE
-# ==========================================
-
 def require_auth(f):
-    """
-    Verify the Firebase ID token and attach the authenticated
-    user's information to the Flask request context.
-    """
+    """Verify the Firebase ID token and load the user's profile."""
 
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -70,7 +71,7 @@ def require_auth(f):
         if not auth_header.startswith("Bearer "):
             return jsonify({
                 "error": "Unauthorized",
-                "message": "Missing or invalid Authorization header"
+                "message": "Missing or invalid Authorization header."
             }), 401
 
         token = auth_header[len("Bearer "):].strip()
@@ -78,84 +79,79 @@ def require_auth(f):
         if not token:
             return jsonify({
                 "error": "Unauthorized",
-                "message": "Missing Firebase ID token"
+                "message": "Missing Firebase ID token."
             }), 401
 
+        # Verify the Firebase ID token.
         try:
-            # Verify the Firebase ID token.
             decoded_token = auth.verify_id_token(token)
-
-            uid = decoded_token.get("uid")
-            if not uid:
-                return jsonify({
-                    "error": "Unauthorized",
-                    "message": "Invalid user identity"
-                }), 401
-
-            g.user = decoded_token
-            g.uid = uid
-
-            # Retrieve the user's application profile.
-            db = get_db()
-            user_doc = db.collection("users").document(uid).get()
-
-            # Do not grant access to accounts without a profile.
-            if not user_doc.exists:
-                return jsonify({
-                    "error": "Forbidden",
-                    "message": "User profile not found"
-                }), 403
-
-            user_data = user_doc.to_dict() or {}
-
-            # Block deactivated accounts.
-            if not user_data.get("is_active", True):
-                return jsonify({
-                    "error": "Forbidden",
-                    "message": "Account has been deactivated"
-                }), 403
-
-            # Role comes from the Firestore profile, not token claims.
-            role = user_data.get("role")
-
-            if role not in ("admin", "teacher", "student"):
-                return jsonify({
-                    "error": "Forbidden",
-                    "message": "User profile has an invalid role"
-                }), 403
-
-            g.role = role
-            g.user_data = {
-                **user_data,
-                "uid": uid,
-                "email": user_data.get(
-                    "email",
-                    decoded_token.get("email", "")
-                ),
-                "role": role
-            }
-
-            return f(*args, **kwargs)
-
         except Exception:
-            # Avoid exposing internal verification or database details.
             return jsonify({
                 "error": "Unauthorized",
                 "message": "Authentication failed. Please sign in again."
             }), 401
 
+        uid = decoded_token.get("uid")
+
+        if not uid:
+            return jsonify({
+                "error": "Unauthorized",
+                "message": "Invalid user token."
+            }), 401
+
+        # Load the user profile from Firestore.
+        # Database failures should not be reported as invalid tokens.
+        try:
+            db = get_db()
+            user_doc = db.collection("users").document(uid).get()
+        except Exception:
+            return jsonify({
+                "error": "Service Unavailable",
+                "message": "Unable to access the user profile."
+            }), 503
+
+        if not user_doc.exists:
+            return jsonify({
+                "error": "Forbidden",
+                "message": "User profile not found."
+            }), 403
+
+        user_data = user_doc.to_dict() or {}
+
+        if not user_data.get("is_active", True):
+            return jsonify({
+                "error": "Forbidden",
+                "message": "Account has been deactivated."
+            }), 403
+
+        role = user_data.get("role")
+
+        if role not in ("admin", "teacher", "student"):
+            return jsonify({
+                "error": "Forbidden",
+                "message": "User role is missing or invalid."
+            }), 403
+
+        g.user = decoded_token
+        g.uid = uid
+        g.role = role
+        g.user_data = {
+            **user_data,
+            "uid": uid,
+            "email": user_data.get(
+                "email",
+                decoded_token.get("email", "")
+            ),
+            "role": role
+        }
+
+        return f(*args, **kwargs)
+
     return decorated_function
 
 
-# ==========================================
-# ROLE-BASED AUTHORIZATION
-# ==========================================
-
 def require_role(allowed_roles):
-    """
-    Restrict an endpoint to the specified application roles.
-    Example: @require_role(["admin", "teacher"])
-    """
+    """Restrict an endpoint to one or more authorized roles."""
 
     if isinstance(allowed_roles, str):
         allowed_roles = [allowed_roles]
@@ -165,12 +161,13 @@ def require_role(allowed_roles):
         @wraps(f)
         @require_auth
         def decorated_function(*args, **kwargs):
-            user_role = getattr(g, "role", None)
-
-            if user_role not in allowed_roles:
+            if getattr(g, "role", None) not in allowed_roles:
                 return jsonify({
                     "error": "Forbidden",
-                    "message": "You do not have permission to access this resource."
+                    "message": (
+                        "You do not have permission to access "
+                        "this resource."
+                    )
                 }), 403
 
             return f(*args, **kwargs)
@@ -178,3 +175,4 @@ def require_role(allowed_roles):
         return decorated_function
 
     return decorator
+```
